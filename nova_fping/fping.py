@@ -17,27 +17,63 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 import itertools
+import os
+import time
+
+from webob import exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import common
 from nova import compute
 from nova import exception
+from nova import flags
 from nova import utils
 
 from nova import log as logging
 
+from nova.openstack.common import cfg
+
 
 LOG = logging.getLogger(__name__)
+fping_opts = [
+    cfg.IntOpt("fping_interval",
+               default=60,
+               help="Minimal interval between two pings for one project"
+               " in seconds."),
+    cfg.StrOpt("fping_path",
+               default="/usr/sbin/fping",
+               help="Full path to fping."),
+]
+
+FLAGS = flags.FLAGS
+FLAGS.register_opts(fping_opts)
 
 
 class FpingController(object):
 
     def __init__(self, network_api=None):
         self.compute_api = compute.API()
+        self.last_call = {}
+
+    def check_fping(self, context):
+        project_id = context.project_id
+        if not os.access(FLAGS.fping_path, os.X_OK):
+                raise exc.HTTPServiceUnavailable(
+                    explanation=_("fping utility is not found."))
+
+        now = time.time()
+        last_call = self.last_call.get(project_id, None)
+        if last_call is not None:
+            if now - last_call < FLAGS.fping_interval:
+                raise exc.HTTPServiceUnavailable(
+                    explanation=_("fping cannot be performed at the moment."
+                                  " Please try again after %d seconds") %
+                    int(FLAGS.fping_interval - (now - last_call)))
+        self.last_call[project_id] = now
 
     @staticmethod
     def fping(ips):
-        fping_ret = utils.execute("/usr/sbin/fping", *ips,
+        fping_ret = utils.execute(FLAGS.fping_path, *ips,
                                   check_exit_code=False)
         if not fping_ret:
             return set()
@@ -58,15 +94,16 @@ class FpingController(object):
         return ret
 
     def index(self, req):
-        context = req.environ['nova.context']
+        context = req.environ["nova.context"]
+        self.check_fping(context)
         search_opts = {}
-        search_opts['deleted'] = False
-        if not context.is_admin or (context.is_admin and 'all_tenants'
+        search_opts["deleted"] = False
+        if not context.is_admin or (context.is_admin and "all_tenants"
                                     not in req.GET):
             if context.project_id:
-                search_opts['project_id'] = context.project_id
+                search_opts["project_id"] = context.project_id
             else:
-                search_opts['user_id'] = context.user_id
+                search_opts["user_id"] = context.user_id
         include = req.GET.get("include", None)
         if include:
             include = set(include.split(","))
@@ -106,7 +143,8 @@ class FpingController(object):
 
     def show(self, req, id):
         try:
-            context = req.environ['nova.context']
+            context = req.environ["nova.context"]
+            self.check_fping(context)
             instance = self.compute_api.get(context, id)
             ips = [str(ip) for ip in self._get_instance_ips(context, instance)]
             alive_ips = self.fping(ips)
@@ -124,13 +162,13 @@ class FpingController(object):
 class Fping(extensions.ExtensionDescriptor):
     """Fping Management Extension."""
 
-    name = "GDFpings"
-    alias = "gd-fping"
+    name = "Fping"
+    alias = "os-fping"
     namespace = "http://docs.openstack.org/compute/ext/fping/api/v1.1"
     updated = "2012-07-06T00:00:00+00:00"
 
     def get_resources(self):
         res = extensions.ResourceExtension(
-            'gd-fping',
+            "os-fping",
             FpingController())
         return [res]
