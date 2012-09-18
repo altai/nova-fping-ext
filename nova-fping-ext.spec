@@ -43,30 +43,6 @@ Host checker extension for nova.
 %clean
 %__rm -rf %{buildroot}
 
-%post
-if [ "$1" = "2" ]; then # upgrade
-    exit 0
-fi
-
-if ! grep -q osapi_compute_extension /etc/nova/nova.conf; then
-    echo "osapi_compute_extension = nova.api.openstack.compute.contrib.standard_extensions" >> /etc/nova/nova.conf
-fi
-if ! grep -q nova_fping.fping.Networks /etc/nova/nova.conf; then
-    echo "osapi_compute_extension = nova_fping.fping.Fping" >> /etc/nova/nova.conf
-    /sbin/service nova-api condrestart
-fi
-exit 0
-
-%postun
-if [ "$1" = "0" ]; then # uninstallation
-    if grep -q nova_fping.fping.Fping /etc/nova/nova.conf; then
-        sed -i '/nova_fping.fping.Fping/d' /etc/nova/nova.conf
-    else
-        exit 0
-    fi
-fi
-/sbin/service nova-api condrestart
-exit 0
 
 %files
 %defattr(-,root,root,-)
